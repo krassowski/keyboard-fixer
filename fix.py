@@ -19,6 +19,23 @@ import sys
 
 
 DEFAULT_BROKEN_LETTER = "s"
+PRONOUNS = {
+    "i", "you", "he", "she", "it", "we", "they",
+    "I", "You", "He", "She", "It", "We", "They",
+}
+
+PLURALITY_INDICATORS = {
+    # number words > 1
+    "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty",
+    "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand",
+    "million", "billion",
+    # quantifiers
+    "many", "few", "several", "multiple", "various", "numerous",
+    "both", "all", "these", "those", "other", "certain", "some",
+}
+
 PRONOUN_FOLLOWERS = {
     "am", "was", "wasn't", "have", "haven't", "had", "hadn't",
     "can", "can't", "could", "couldn't", "do", "don't", "did",
@@ -136,6 +153,57 @@ def try_fix_trailing_apostrophe(core, suffix, broken_letter):
     return None
 
 
+def looks_like_plural_number(word):
+    """Return True if word is a numeral greater than 1."""
+    try:
+        return float(word.replace(",", "")) > 1
+    except ValueError:
+        return False
+
+
+def fix_plural(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Add a trailing 's' when the preceding word clearly demands a plural."""
+    if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
+        return None
+
+    prefix, core, suffix = split_word_parts(word)
+    if not core or core.lower().endswith("s"):
+        return None
+
+    previous_core = get_alpha_core(previous_word) if previous_word else ""
+    plural_context = (
+        previous_core.lower() in PLURALITY_INDICATORS
+        or (previous_word is not None and looks_like_plural_number(previous_word))
+    )
+    if not plural_context:
+        return None
+
+    # Only pluralize words aspell already considers correct (real singular nouns)
+    if get_suggestions(core.lower()) is not None:
+        return None
+
+    for plural_suffix in ("s", "es"):
+        candidate = core.lower() + plural_suffix
+        if get_suggestions(candidate) is None:
+            return prefix + restore_case(candidate, core) + suffix
+
+    return None
+
+
+def fix_still(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Replace 'till' with 'still' when preceded by a pronoun and broken letter is s."""
+    if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
+        return None
+    prefix, core, suffix = split_word_parts(word)
+    if core.lower() != "till":
+        return None
+    previous_core = get_alpha_core(previous_word) if previous_word else ""
+    if previous_core not in PRONOUNS:
+        return None
+    fixed = "Still" if core.istitle() else "still"
+    return prefix + fixed + suffix
+
+
 def fix_standalone_i(word, previous_word, next_word, broken_letter=DEFAULT_BROKEN_LETTER):
     """Resolve standalone lowercase 'i' as either 'is' or 'I' when the broken letter is s."""
     if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
@@ -192,6 +260,14 @@ def fix_line(line, broken_letter=DEFAULT_BROKEN_LETTER):
         previous_word = next((tokens[i] for i in range(index - 1, -1, -1) if not tokens[i].isspace()), None)
         next_word = next((tokens[i] for i in range(index + 1, len(tokens)) if not tokens[i].isspace()), None)
 
+        fixed_still = fix_still(token, previous_word, broken_letter=broken_letter)
+        if fixed_still is not None:
+            fixed_tokens.append(fixed_still)
+            continue
+        fixed_plural = fix_plural(token, previous_word, broken_letter=broken_letter)
+        if fixed_plural is not None:
+            fixed_tokens.append(fixed_plural)
+            continue
         fixed_i = fix_standalone_i(token, previous_word, next_word, broken_letter=broken_letter)
         fixed_tokens.append(fixed_i if fixed_i is not None else fix_word(token, broken_letter=broken_letter))
 
