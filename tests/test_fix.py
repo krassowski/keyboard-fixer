@@ -67,6 +67,7 @@ def test_fix_as_phrase_not_applied_outside_context(mock_suggestions):
 
 def test_fix_third_person_verb_s(mock_suggestions):
     assert fix.fix_line("This look good to me") == "This looks good to me"
+    assert fix.fix_line("it look great") == "it looks great"
     assert fix.fix_line("it seem very risky") == "it seems very risky"
 
 

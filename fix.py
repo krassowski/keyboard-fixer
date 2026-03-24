@@ -64,7 +64,7 @@ THIRD_PERSON_SINGULAR_SUBJECTS = {
 
 VERB_CONTEXT_FOLLOWERS = {
     "not", "very", "too", "so", "quite", "rather", "really",
-    "good", "bad", "better", "worse", "best", "worst",
+    "good", "great", "bad", "better", "worse", "best", "worst",
     "important", "critical", "urgent", "fine", "okay", "ok",
     "to", "for", "with", "at", "in", "on", "about", "like",
 }
