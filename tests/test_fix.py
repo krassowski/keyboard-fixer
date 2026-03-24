@@ -97,6 +97,12 @@ def test_fix_line_prefers_lowercase_candidates_and_skips_acronyms(mock_suggestio
     assert fix.fix_line("cae ok ee") == "case ok see"
 
 
+def test_fix_line_hardcoded_s_special_cases(mock_suggestions):
+    assert fix.fix_line("uggetion") == "suggestion"
+    assert fix.fix_line("doe it work") == "does it work"
+    assert fix.fix_line("DOE") == "DOES"
+
+
 def test_fix_line_supports_custom_broken_letter(mock_suggestions):
     assert fix.fix_line("otor oil", broken_letter="m") == "motor oil"
 

@@ -19,6 +19,11 @@ import sys
 
 
 DEFAULT_BROKEN_LETTER = "s"
+SPECIAL_CASES_S = {
+    "uggetion": "suggestion",
+    "doe": "does",
+}
+
 PRONOUNS = {
     "i", "you", "he", "she", "it", "we", "they",
     "I", "You", "He", "She", "It", "We", "They",
@@ -315,6 +320,11 @@ def fix_word(word, broken_letter=DEFAULT_BROKEN_LETTER):
 
     if not core:
         return word
+
+    if broken_letter == DEFAULT_BROKEN_LETTER:
+        forced = SPECIAL_CASES_S.get(core.lower())
+        if forced is not None:
+            return prefix + restore_case(forced, core) + suffix
 
     apostrophe_fix = try_fix_trailing_apostrophe(core, suffix, broken_letter)
     if apostrophe_fix is not None:
