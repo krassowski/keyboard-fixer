@@ -101,6 +101,12 @@ def test_fix_line_hardcoded_s_special_cases(mock_suggestions):
     assert fix.fix_line("uggetion") == "suggestion"
     assert fix.fix_line("doe it work") == "does it work"
     assert fix.fix_line("ene") == "sense"
+    assert fix.fix_line("meage") == "message"
+    assert fix.fix_line("buine") == "business"
+    assert fix.fix_line("dicuion") == "discussion"
+    assert fix.fix_line("ucceful") == "successful"
+    assert fix.fix_line("aement") == "assessment"
+    assert fix.fix_line("aitant") == "assistant"
     assert fix.fix_line("DOE") == "DOES"
 
 

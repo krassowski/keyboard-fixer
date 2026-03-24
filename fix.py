@@ -20,9 +20,16 @@ import sys
 
 DEFAULT_BROKEN_LETTER = "s"
 SPECIAL_CASES_S = {
+    # this is opinionated, but these are common enough that it's worth hardcoding them rather than relying on aspell suggestions
     "uggetion": "suggestion",
     "doe": "does",
     "ene": "sense",
+    "meage": "message",
+    "buine": "business",
+    "dicuion": "discussion",
+    "ucceful": "successful",
+    "aement": "assessment",
+    "aitant": "assistant",
 }
 
 PRONOUNS = {
