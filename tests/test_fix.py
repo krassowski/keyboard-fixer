@@ -48,6 +48,34 @@ def test_fix_plural_not_applied_for_custom_broken_letter(mock_suggestions):
     assert fix.fix_line("many book", broken_letter="m") == "many book"  # rule inactive
 
 
+def test_fix_as_phrase_for_judgement_context(mock_suggestions):
+    assert (
+        fix.fix_line("what we judge a high priority")
+        == "what we judge as high priority"
+    )
+    assert (
+        fix.fix_line("they judged a not important issue")
+        == "they judged as not important issue"
+    )
+
+
+def test_fix_as_phrase_not_applied_outside_context(mock_suggestions):
+    assert fix.fix_line("we need a high priority") == "we need a high priority"
+    assert fix.fix_line("judge a problem") == "judge a problem"
+    assert fix.fix_line("they judged a high priority issue", broken_letter="m") == "they judged a high priority issue"
+
+
+def test_fix_third_person_verb_s(mock_suggestions):
+    assert fix.fix_line("This look good to me") == "This looks good to me"
+    assert fix.fix_line("it seem very risky") == "it seems very risky"
+
+
+def test_fix_third_person_verb_s_not_applied_outside_context(mock_suggestions):
+    assert fix.fix_line("I look good to me") == "I look good to me"
+    assert fix.fix_line("These look good to me") == "These look good to me"
+    assert fix.fix_line("This look good to me", broken_letter="m") == "This look good to me"
+
+
 def test_fix_line_pronoun_till_becomes_still():
     assert fix.fix_line("I till love it") == "I still love it"
     assert fix.fix_line("she till") == "she still"

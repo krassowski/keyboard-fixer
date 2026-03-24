@@ -36,6 +36,39 @@ PLURALITY_INDICATORS = {
     "both", "all", "these", "those", "other", "certain", "some",
 }
 
+AS_TRIGGER_VERBS = {
+    "judge", "judges", "judged", "judging",
+    "consider", "considers", "considered", "considering",
+    "treat", "treats", "treated", "treating",
+    "view", "views", "viewed", "viewing",
+    "regard", "regards", "regarded", "regarding",
+    "classify", "classifies", "classified", "classifying",
+    "rate", "rates", "rated", "rating",
+    "deem", "deems", "deemed", "deeming",
+    "label", "labels", "labeled", "labeling", "labelled", "labelling",
+    "mark", "marks", "marked", "marking",
+}
+
+AS_FOLLOWERS = {
+    "not", "high", "low", "important", "critical", "urgent", "priority",
+    "optional", "necessary", "safe", "unsafe", "risky", "relevant",
+    "irrelevant", "acceptable", "unacceptable", "good", "bad", "better",
+    "worse", "best", "worst", "major", "minor", "primary", "secondary",
+    "top", "key", "essential", "useful", "harmful", "likely", "unlikely",
+    "possible", "impossible", "required",
+}
+
+THIRD_PERSON_SINGULAR_SUBJECTS = {
+    "this", "that", "it", "he", "she",
+}
+
+VERB_CONTEXT_FOLLOWERS = {
+    "not", "very", "too", "so", "quite", "rather", "really",
+    "good", "bad", "better", "worse", "best", "worst",
+    "important", "critical", "urgent", "fine", "okay", "ok",
+    "to", "for", "with", "at", "in", "on", "about", "like",
+}
+
 PRONOUN_FOLLOWERS = {
     "am", "was", "wasn't", "have", "haven't", "had", "hadn't",
     "can", "can't", "could", "couldn't", "do", "don't", "did",
@@ -161,7 +194,7 @@ def looks_like_plural_number(word):
         return False
 
 
-def fix_plural(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
+def fix_plural(word, previous_word, next_word, broken_letter=DEFAULT_BROKEN_LETTER):
     """Add a trailing 's' when the preceding word clearly demands a plural."""
     if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
         return None
@@ -178,6 +211,10 @@ def fix_plural(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
     if not plural_context:
         return None
 
+    next_core = get_alpha_core(next_word).lower() if next_word else ""
+    if next_core and (next_core in VERB_CONTEXT_FOLLOWERS or next_core.endswith("ly")):
+        return None
+
     # Only pluralize words aspell already considers correct (real singular nouns)
     if get_suggestions(core.lower()) is not None:
         return None
@@ -188,6 +225,56 @@ def fix_plural(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
             return prefix + restore_case(candidate, core) + suffix
 
     return None
+
+
+def fix_as_phrase(word, previous_word, next_word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Replace standalone 'a' with 'as' in judge/consider-like contexts."""
+    if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
+        return None
+
+    prefix, core, suffix = split_word_parts(word)
+    if core.lower() != "a":
+        return None
+
+    previous_core = get_alpha_core(previous_word).lower() if previous_word else ""
+    if previous_core not in AS_TRIGGER_VERBS:
+        return None
+
+    next_core = get_alpha_core(next_word).lower() if next_word else ""
+    if not next_core:
+        return None
+
+    if next_core not in AS_FOLLOWERS and not next_core.endswith("ly"):
+        return None
+
+    fixed = "As" if core.istitle() else "as"
+    return prefix + fixed + suffix
+
+
+def fix_third_person_s_verb(word, previous_word, next_word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Add a missing third-person singular 's' in simple contexts (e.g. this look -> this looks)."""
+    if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
+        return None
+
+    prefix, core, suffix = split_word_parts(word)
+    if not core or not core.isalpha() or core.lower().endswith("s"):
+        return None
+
+    previous_core = get_alpha_core(previous_word).lower() if previous_word else ""
+    if previous_core not in THIRD_PERSON_SINGULAR_SUBJECTS:
+        return None
+
+    next_core = get_alpha_core(next_word).lower() if next_word else ""
+    if not next_core:
+        return None
+    if next_core not in VERB_CONTEXT_FOLLOWERS and not next_core.endswith("ly"):
+        return None
+
+    candidate = core.lower() + "s"
+    if get_suggestions(candidate) is not None:
+        return None
+
+    return prefix + restore_case(candidate, core) + suffix
 
 
 def fix_still(word, previous_word, broken_letter=DEFAULT_BROKEN_LETTER):
@@ -264,7 +351,15 @@ def fix_line(line, broken_letter=DEFAULT_BROKEN_LETTER):
         if fixed_still is not None:
             fixed_tokens.append(fixed_still)
             continue
-        fixed_plural = fix_plural(token, previous_word, broken_letter=broken_letter)
+        fixed_as = fix_as_phrase(token, previous_word, next_word, broken_letter=broken_letter)
+        if fixed_as is not None:
+            fixed_tokens.append(fixed_as)
+            continue
+        fixed_verb = fix_third_person_s_verb(token, previous_word, next_word, broken_letter=broken_letter)
+        if fixed_verb is not None:
+            fixed_tokens.append(fixed_verb)
+            continue
+        fixed_plural = fix_plural(token, previous_word, next_word, broken_letter=broken_letter)
         if fixed_plural is not None:
             fixed_tokens.append(fixed_plural)
             continue
