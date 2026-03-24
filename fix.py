@@ -22,6 +22,7 @@ DEFAULT_BROKEN_LETTER = "s"
 SPECIAL_CASES_S = {
     "uggetion": "suggestion",
     "doe": "does",
+    "ene": "sense",
 }
 
 PRONOUNS = {

@@ -100,6 +100,7 @@ def test_fix_line_prefers_lowercase_candidates_and_skips_acronyms(mock_suggestio
 def test_fix_line_hardcoded_s_special_cases(mock_suggestions):
     assert fix.fix_line("uggetion") == "suggestion"
     assert fix.fix_line("doe it work") == "does it work"
+    assert fix.fix_line("ene") == "sense"
     assert fix.fix_line("DOE") == "DOES"
 
 
