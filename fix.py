@@ -107,6 +107,25 @@ def restore_case(word, template):
     return word
 
 
+def pick_insertion_suggestion(lookup_word, suggestions, broken_letter):
+    """Pick the most suitable insertion-based suggestion for the original word casing."""
+    matches = [
+        suggestion
+        for suggestion in suggestions
+        if is_letter_insertion(lookup_word, suggestion, broken_letter)
+    ]
+    if not matches:
+        return None
+
+    if lookup_word.islower():
+        lowercase_matches = [suggestion for suggestion in matches if suggestion.islower()]
+        if lowercase_matches:
+            return lowercase_matches[0]
+        return None
+
+    return matches[0]
+
+
 def try_fix_trailing_apostrophe(core, suffix, broken_letter):
     if not suffix.startswith("'") or core.lower().endswith(broken_letter):
         return None
@@ -153,14 +172,11 @@ def fix_word(word, broken_letter=DEFAULT_BROKEN_LETTER):
     if suggestions is None:
         return word
 
-    fixed = next(
-        (suggestion for suggestion in suggestions if is_letter_insertion(lookup_word, suggestion, broken_letter)),
-        None,
-    )
+    fixed = pick_insertion_suggestion(lookup_word, suggestions, broken_letter)
     if fixed is None:
         return word
 
-    fixed = restore_case(fixed, core)
+    fixed = restore_case(fixed.lower(), core)
     return prefix + fixed + trailing_suffix
 
 
