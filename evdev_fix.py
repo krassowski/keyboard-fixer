@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Live keyboard fixer for Linux evdev/uinput.
 
-This script grabs a physical keyboard device, buffers typed words, fixes them
-using the existing spelling logic from fix.py, and injects corrected text back
-through uinput. It intentionally delays output by one word so standalone
-lowercase "i" can be resolved as either "is" or "I" based on the following
-word.
+This script grabs a physical keyboard device, mirrors typed characters through
+uinput immediately, and rewrites the current word in place when it can improve
+the spelling. By default it corrects on word boundaries and after one second
+of idle time.
 
 It is designed for plain text entry and assumes a typical Ubuntu system with
 access to /dev/input/event* and /dev/uinput.
@@ -16,6 +15,7 @@ import atexit
 import fcntl
 import glob
 import os
+import select
 import signal
 import struct
 import sys
@@ -299,21 +299,28 @@ class UInputKeyboard:
         for character in text:
             self.type_char(character)
 
+    def press_backspace(self, count=1):
+        for _ in range(count):
+            self.tap_key(KEY_BACKSPACE)
+
 
 class LiveKeyboardFixer:
-    def __init__(self, device_path):
+    def __init__(self, device_path, idle_seconds=1.0, broken_letter=fix.DEFAULT_BROKEN_LETTER):
         self.device_path = device_path
+        self.idle_seconds = idle_seconds
+        self.broken_letter = fix.normalize_broken_letter(broken_letter)
         self.input_fd = os.open(device_path, os.O_RDONLY)
         self.output = UInputKeyboard()
         self.shift_pressed = set()
+        self.ctrl_pressed = set()
+        self.alt_pressed = set()
+        self.meta_pressed = set()
         self.caps_lock = False
         self.suppressed_releases = {}
         self.current_word = []
         self.current_word_sentence_start = True
-        self.pending_word = None
-        self.pending_delimiter = ""
-        self.pending_sentence_start = True
         self.next_word_sentence_start = True
+        self.last_edit_at = None
 
         fcntl.ioctl(self.input_fd, EVIOCGRAB, 1)
 
@@ -347,8 +354,26 @@ class LiveKeyboardFixer:
                 self.shift_pressed.add(key_code)
             else:
                 self.shift_pressed.discard(key_code)
+        elif key_code in CTRL_KEYS:
+            if is_pressed:
+                self.ctrl_pressed.add(key_code)
+            else:
+                self.ctrl_pressed.discard(key_code)
+        elif key_code in ALT_KEYS:
+            if is_pressed:
+                self.alt_pressed.add(key_code)
+            else:
+                self.alt_pressed.discard(key_code)
+        elif key_code in META_KEYS:
+            if is_pressed:
+                self.meta_pressed.add(key_code)
+            else:
+                self.meta_pressed.discard(key_code)
         elif key_code == KEY_CAPSLOCK and value == 1:
             self.caps_lock = not self.caps_lock
+
+    def has_shortcut_modifier(self):
+        return bool(self.ctrl_pressed or self.alt_pressed or self.meta_pressed)
 
     def event_to_char(self, key_code):
         chars = KEY_TO_CHARS.get(key_code)
@@ -361,48 +386,55 @@ class LiveKeyboardFixer:
             return upper if use_upper else lower
         return upper if self.shift_pressed else lower
 
-    def resolve_word(self, word, sentence_start, next_word):
+    @staticmethod
+    def resolve_word(word, sentence_start, next_word, broken_letter=fix.DEFAULT_BROKEN_LETTER):
         previous_token = None if sentence_start else "word"
-        fixed_i = fix.fix_standalone_i(word, previous_token, next_word)
+        fixed_i = fix.fix_standalone_i(word, previous_token, next_word, broken_letter=broken_letter)
         if fixed_i is not None:
             return fixed_i
-        return fix.fix_word(word)
-
-    def emit_pending_word(self, next_word=None):
-        if self.pending_word is None:
-            return
-        resolved = self.resolve_word(self.pending_word, self.pending_sentence_start, next_word)
-        self.output.type_text(resolved)
-        self.output.type_text(self.pending_delimiter)
-        self.next_word_sentence_start = self.pending_delimiter in SENTENCE_ENDERS or self.pending_delimiter == "\n"
-        self.pending_word = None
-        self.pending_delimiter = ""
+        return fix.fix_word(word, broken_letter=broken_letter)
 
     def start_word_if_needed(self):
         if not self.current_word:
             self.current_word_sentence_start = self.next_word_sentence_start
 
-    def finish_current_word(self, delimiter):
+    def correct_current_word(self, force=False):
         if not self.current_word:
-            self.emit_pending_word()
-            self.output.type_text(delimiter)
-            self.next_word_sentence_start = delimiter in SENTENCE_ENDERS or delimiter == "\n"
             return
 
-        completed_word = "".join(self.current_word)
+        if not force and self.last_edit_at is not None:
+            if time.monotonic() - self.last_edit_at < self.idle_seconds:
+                return
+
+        current_text = "".join(self.current_word)
+        corrected_text = self.resolve_word(
+            current_text,
+            self.current_word_sentence_start,
+            None,
+            broken_letter=self.broken_letter,
+        )
+        if corrected_text == current_text:
+            return
+
+        self.output.press_backspace(len(current_text))
+        self.output.type_text(corrected_text)
+        self.current_word = list(corrected_text)
+        self.last_edit_at = time.monotonic()
+
+    def finish_current_word(self, delimiter=""):
+        self.correct_current_word(force=True)
+        if delimiter:
+            self.output.type_char(delimiter)
+
         self.current_word.clear()
-        self.emit_pending_word(next_word=completed_word)
-        self.pending_word = completed_word
-        self.pending_delimiter = delimiter
-        self.pending_sentence_start = self.current_word_sentence_start
+        self.last_edit_at = None
+        self.next_word_sentence_start = delimiter in SENTENCE_ENDERS or delimiter == "\n"
 
     def flush_all(self):
-        current_word = "".join(self.current_word) if self.current_word else None
-        self.emit_pending_word(next_word=current_word)
-        if current_word:
-            self.output.type_text(current_word)
-            self.current_word.clear()
-            self.next_word_sentence_start = False
+        if not self.current_word:
+            return
+        self.finish_current_word()
+        self.next_word_sentence_start = False
 
     def flush_before_passthrough(self):
         self.flush_all()
@@ -427,6 +459,8 @@ class LiveKeyboardFixer:
         else:
             self.start_word_if_needed()
             self.current_word.append(character)
+            self.last_edit_at = time.monotonic()
+            self.output.type_char(character)
         return True
 
     def handle_backspace(self, value):
@@ -442,6 +476,8 @@ class LiveKeyboardFixer:
         if self.current_word:
             self.track_suppressed_release(KEY_BACKSPACE, 1)
             self.current_word.pop()
+            self.last_edit_at = time.monotonic()
+            self.output.press_backspace()
             return True
 
         return False
@@ -451,6 +487,16 @@ class LiveKeyboardFixer:
 
     def run(self):
         while True:
+            timeout = None
+            if self.current_word and self.last_edit_at is not None:
+                elapsed = time.monotonic() - self.last_edit_at
+                timeout = max(0.0, self.idle_seconds - elapsed)
+
+            readable, _, _ = select.select([self.input_fd], [], [], timeout)
+            if not readable:
+                self.correct_current_word(force=True)
+                continue
+
             data = os.read(self.input_fd, INPUT_EVENT.size)
             if len(data) != INPUT_EVENT.size:
                 continue
@@ -463,9 +509,18 @@ class LiveKeyboardFixer:
             self.update_modifier_state(code, value)
 
             if code in MODIFIER_KEYS:
-                if self.current_word or self.pending_word is not None:
+                if value == 0 and self.should_consume_release(code):
                     self.track_suppressed_release(code, value)
                     continue
+                if self.current_word:
+                    self.track_suppressed_release(code, value)
+                    continue
+                self.passthrough_key(code, value)
+                continue
+
+            if self.has_shortcut_modifier():
+                if value == 1:
+                    self.flush_before_passthrough()
                 self.passthrough_key(code, value)
                 continue
 
@@ -475,7 +530,7 @@ class LiveKeyboardFixer:
             if self.handle_printable_key(code, value):
                 continue
 
-            if code in NAVIGATION_KEYS or code in CTRL_KEYS or code in ALT_KEYS or code in META_KEYS:
+            if code in NAVIGATION_KEYS:
                 if value == 1:
                     self.flush_before_passthrough()
                 self.passthrough_key(code, value)
@@ -490,7 +545,15 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="Live spelling fixer using evdev/uinput")
     parser.add_argument("device", nargs="?", help="Input event device, for example /dev/input/by-id/...-event-kbd")
     parser.add_argument("--list-devices", action="store_true", help="List available /dev/input/event* devices and exit")
-    return parser.parse_args(argv)
+    parser.add_argument("--idle-seconds", type=float, default=1.0, help="Correct the current word after this much idle time (default: 1.0)")
+    parser.add_argument(
+        "--broken-letter",
+        default=fix.DEFAULT_BROKEN_LETTER,
+        help=f"Letter that the keyboard is missing (default: {fix.DEFAULT_BROKEN_LETTER})",
+    )
+    args = parser.parse_args(argv)
+    args.broken_letter = fix.normalize_broken_letter(args.broken_letter)
+    return args
 
 
 def main(argv=None):
@@ -509,7 +572,11 @@ def main(argv=None):
         print(f"error: device not found: {args.device}", file=sys.stderr)
         return 2
 
-    fixer = LiveKeyboardFixer(args.device)
+    fixer = LiveKeyboardFixer(
+        args.device,
+        idle_seconds=args.idle_seconds,
+        broken_letter=args.broken_letter,
+    )
     atexit.register(fixer.close)
 
     def stop(signum, frame):

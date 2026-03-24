@@ -5,6 +5,7 @@ My keyboard iz mizzing an "s" and hardwarde problemz require zoftware zolutionz
 
 ```bash
 python3 fix.py 'thi i a tet'
+python3 fix.py --broken-letter m 'otor oil'
 ```
 
 ## Live evdev fixer
@@ -14,17 +15,20 @@ There is also a Linux-only live fixer in [evdev_fix.py](evdev_fix.py). It uses o
 It works by:
 
 1. grabbing a physical keyboard from `/dev/input/event*`
-2. buffering typed words
-3. fixing them with a one-word delay
+2. echoing typed characters immediately
+3. correcting the current word on space or after a short idle timeout
 4. re-injecting corrected text through `/dev/uinput`
 
-That one-word delay is intentional so standalone `i` can become either `is` or `I` based on the next word.
+By default the idle timeout is 1 second.
 
 Example usage:
 
 ```bash
 python3 evdev_fix.py --list-devices
-sudo python3 evdev_fix.py /dev/input/by-id/usb-...-event-kbd
+# find your keyboard name on the list
+sudo python3 evdev_fix.py /dev/input/event20
+sudo python3 evdev_fix.py --idle-seconds 1.0 /dev/input/event20
+sudo python3 evdev_fix.py --broken-letter m /dev/input/event20
 ```
 
 Notes:

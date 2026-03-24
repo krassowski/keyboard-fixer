@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""
-fix_s.py - Intelligently restores missing 's' characters in text.
+"""Intelligently restores a missing letter in text.
 
 Uses aspell's suggestion engine (available on Ubuntu by default).
 For each unknown word, fetches aspell's suggestions and picks any
-that can be explained by a missing 's' — i.e. the suggestion equals
-the word with one 's' inserted somewhere.
+that can be explained by a missing character insertion.
 
 Usage:
-    echo "thi i a tet entence" | python3 fix_s.py
-    python3 fix_s.py "thi i a tet entence"
-    python3 fix_s.py   # interactive mode
+    echo "thi i a tet entence" | python3 fix.py
+    python3 fix.py "thi i a tet entence"
+    python3 fix.py --broken-letter m "otor oil"
+    python3 fix.py   # interactive mode
 """
 
-import sys
+import argparse
 import re
 import subprocess
+import sys
 
 
+DEFAULT_BROKEN_LETTER = "s"
 PRONOUN_FOLLOWERS = {
     "am", "was", "wasn't", "have", "haven't", "had", "hadn't",
     "can", "can't", "could", "couldn't", "do", "don't", "did",
@@ -28,52 +29,61 @@ PRONOUN_FOLLOWERS = {
     "will", "won't", "would", "wouldn't",
 }
 
+
+def normalize_broken_letter(letter):
+    if len(letter) != 1 or not letter.isalpha():
+        raise ValueError("broken letter must be a single alphabetic character")
+    return letter.lower()
+
+
 def get_suggestions(word):
     """Ask aspell for suggestions for a misspelled word.
     Returns a list of suggestions, or None if the word is correct."""
     result = subprocess.run(
         ["aspell", "-a"],
         input=f"{word}\n",
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
     )
     for line in result.stdout.splitlines():
         if line.startswith("*"):
-            return None  # word is correct
+            return None
         if line.startswith("&"):
-            # Format: & original count offset: sug1, sug2, ...
             parts = line.split(": ", 1)
             if len(parts) == 2:
-                return [s.strip() for s in parts[1].split(", ")]
+                return [suggestion.strip() for suggestion in parts[1].split(", ")]
         if line.startswith("#"):
-            return []  # misspelled, no suggestions
+            return []
     return []
 
-def is_s_insertion(original, candidate):
-    """Return True if candidate == original with one or more 's' characters inserted
-    (and no other changes)."""
-    orig = original.lower()
-    cand = candidate.lower()
-    if len(cand) <= len(orig):
+
+def is_letter_insertion(original, candidate, broken_letter):
+    """Return True if candidate equals original with one or more inserted broken letters."""
+    original_lower = original.lower()
+    candidate_lower = candidate.lower()
+    if len(candidate_lower) <= len(original_lower):
         return False
-    # Walk both strings; every extra character in candidate must be 's'
-    i, j = 0, 0
-    while i < len(orig) and j < len(cand):
-        if orig[i] == cand[j]:
-            i += 1
-            j += 1
-        elif cand[j] == 's':
-            j += 1  # skip an inserted 's'
+
+    index_original = 0
+    index_candidate = 0
+    broken_letter = broken_letter.lower()
+    while index_original < len(original_lower) and index_candidate < len(candidate_lower):
+        if original_lower[index_original] == candidate_lower[index_candidate]:
+            index_original += 1
+            index_candidate += 1
+        elif candidate_lower[index_candidate] == broken_letter:
+            index_candidate += 1
         else:
-            return False  # mismatch that isn't an inserted 's'
-    # Any remaining characters in candidate must all be 's'
-    return all(c == 's' for c in cand[j:])
+            return False
+
+    return all(character == broken_letter for character in candidate_lower[index_candidate:])
 
 
 def split_word_parts(word):
     """Split a token into leading punctuation, alphabetic core, and trailing punctuation."""
-    prefix = re.match(r'^([^a-zA-Z]*)', word).group(1)
-    suffix = re.search(r'([^a-zA-Z]*)$', word).group(1)
-    core = word[len(prefix):len(word)-len(suffix) if suffix else None]
+    prefix = re.match(r"^([^a-zA-Z]*)", word).group(1)
+    suffix = re.search(r"([^a-zA-Z]*)$", word).group(1)
+    core = word[len(prefix):len(word) - len(suffix) if suffix else None]
     return prefix, core, suffix
 
 
@@ -82,54 +92,80 @@ def get_alpha_core(word):
     return split_word_parts(word)[1]
 
 
-def fix_standalone_i(word, previous_word, next_word):
-    """Resolve standalone lowercase 'i' as either 'I' or 'is' using local context."""
-    prefix, core, suffix = split_word_parts(word)
-    if core != 'i':
+def detect_sentence_start(previous_word):
+    previous_core = get_alpha_core(previous_word) if previous_word else ""
+    if not previous_core:
+        return True
+    return bool(previous_word and re.search(r"[.!?][\"')\]]*$", previous_word.rstrip()))
+
+
+def restore_case(word, template):
+    if template.isupper():
+        return word.upper()
+    if template.istitle():
+        return word.capitalize()
+    return word
+
+
+def try_fix_trailing_apostrophe(core, suffix, broken_letter):
+    if not suffix.startswith("'") or core.lower().endswith(broken_letter):
         return None
 
-    previous_core = get_alpha_core(previous_word) if previous_word else ''
-    next_core = get_alpha_core(next_word) if next_word else ''
-    sentence_start = not previous_core
-    if previous_word and re.search(r'[.!?]["\')\]]*$', previous_word.rstrip()):
-        sentence_start = True
+    candidate = f"{core}'{broken_letter}"
+    if get_suggestions(candidate.lower()) is None:
+        return candidate + suffix[1:]
+    return None
 
+
+def fix_standalone_i(word, previous_word, next_word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Resolve standalone lowercase 'i' as either 'is' or 'I' when the broken letter is s."""
+    if normalize_broken_letter(broken_letter) != DEFAULT_BROKEN_LETTER:
+        return None
+
+    prefix, core, suffix = split_word_parts(word)
+    if core != "i":
+        return None
+
+    next_core = get_alpha_core(next_word) if next_word else ""
+    sentence_start = detect_sentence_start(previous_word)
     if sentence_start or next_core.lower() in PRONOUN_FOLLOWERS:
-        return prefix + 'I' + suffix
+        return prefix + "I" + suffix
 
-    return prefix + 'is' + suffix
+    return prefix + "is" + suffix
 
-def fix_word(word):
-    """Fix a single word if it's missing an 's'."""
+
+def fix_word(word, broken_letter=DEFAULT_BROKEN_LETTER):
+    """Fix a single word if it's missing the configured letter."""
+    broken_letter = normalize_broken_letter(broken_letter)
     prefix, core, suffix = split_word_parts(word)
 
     if not core:
         return word
 
-    is_upper = core.isupper()
-    is_title = core.istitle()
-    check = core.lower()
+    apostrophe_fix = try_fix_trailing_apostrophe(core, suffix, broken_letter)
+    if apostrophe_fix is not None:
+        return prefix + restore_case(apostrophe_fix, core)
 
-    suggestions = get_suggestions(check)
+    lookup_word = core + ("'" if suffix.startswith("'") else "")
+    trailing_suffix = suffix[1:] if suffix.startswith("'") else suffix
+    suggestions = get_suggestions(lookup_word.lower())
 
     if suggestions is None:
-        return word  # already correct
+        return word
 
-    # Pick the first suggestion explainable by a single missing 's'
-    fixed = next((s for s in suggestions if is_s_insertion(check, s)), None)
-
+    fixed = next(
+        (suggestion for suggestion in suggestions if is_letter_insertion(lookup_word, suggestion, broken_letter)),
+        None,
+    )
     if fixed is None:
-        return word  # can't fix with an 's' insertion
+        return word
 
-    if is_upper:
-        fixed = fixed.upper()
-    elif is_title:
-        fixed = fixed.capitalize()
+    fixed = restore_case(fixed, core)
+    return prefix + fixed + trailing_suffix
 
-    return prefix + fixed + suffix
 
-def fix_line(line):
-    tokens = re.split(r'(\s+)', line)
+def fix_line(line, broken_letter=DEFAULT_BROKEN_LETTER):
+    tokens = re.split(r"(\s+)", line)
     fixed_tokens = []
 
     for index, token in enumerate(tokens):
@@ -140,26 +176,42 @@ def fix_line(line):
         previous_word = next((tokens[i] for i in range(index - 1, -1, -1) if not tokens[i].isspace()), None)
         next_word = next((tokens[i] for i in range(index + 1, len(tokens)) if not tokens[i].isspace()), None)
 
-        fixed_i = fix_standalone_i(token, previous_word, next_word)
-        fixed_tokens.append(fixed_i if fixed_i is not None else fix_word(token))
+        fixed_i = fix_standalone_i(token, previous_word, next_word, broken_letter=broken_letter)
+        fixed_tokens.append(fixed_i if fixed_i is not None else fix_word(token, broken_letter=broken_letter))
 
-    return ''.join(fixed_tokens)
+    return "".join(fixed_tokens)
 
-def main():
-    if len(sys.argv) > 1:
-        text = ' '.join(sys.argv[1:])
-        print(fix_line(text))
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="Restore a missing letter in text")
+    parser.add_argument("text", nargs="*", help="Text to fix; if omitted, read stdin or use interactive mode")
+    parser.add_argument(
+        "--broken-letter",
+        default=DEFAULT_BROKEN_LETTER,
+        help=f"Letter that the keyboard is missing (default: {DEFAULT_BROKEN_LETTER})",
+    )
+    args = parser.parse_args(argv)
+    args.broken_letter = normalize_broken_letter(args.broken_letter)
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv or sys.argv[1:])
+
+    if args.text:
+        print(fix_line(" ".join(args.text), broken_letter=args.broken_letter))
     elif not sys.stdin.isatty():
         for line in sys.stdin:
-            print(fix_line(line.rstrip('\n')))
+            print(fix_line(line.rstrip("\n"), broken_letter=args.broken_letter))
     else:
-        print("Smart 's' restorer — type a sentence and press Enter. Ctrl+C to quit.\n")
+        print("Smart letter restorer — type a sentence and press Enter. Ctrl+C to quit.\n")
         try:
             while True:
                 line = input("> ")
-                print(" ", fix_line(line))
+                print(" ", fix_line(line, broken_letter=args.broken_letter))
         except (KeyboardInterrupt, EOFError):
             print("\nBye!")
+
 
 if __name__ == "__main__":
     main()
