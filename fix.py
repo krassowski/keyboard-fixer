@@ -30,6 +30,13 @@ SPECIAL_CASES_S = {
     "ucceful": "successful",
     "aement": "assessment",
     "aitant": "assistant",
+    "cla": "class",
+    "jut": "just",
+    "tatu": "status",
+    "ubcla": "subclass",
+    "tatubar": "statusbar",
+    "ugget": "suggest",
+    "ide": "side",
 }
 
 PRONOUNS = {
