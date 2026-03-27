@@ -4,6 +4,37 @@ import evdev_fix
 import fix
 
 
+FORMER_SPECIAL_CASES_S = {
+    "uggetion": "suggestion",
+    "doe": "does",
+    "ene": "sense",
+    "meage": "message",
+    "buine": "business",
+    "dicuion": "discussion",
+    "ucceful": "successful",
+    "aement": "assessment",
+    "aitant": "assistant",
+    "cla": "class",
+    "jut": "just",
+    "tatu": "status",
+    "ubcla": "subclass",
+    "tatubar": "statusbar",
+    "ugget": "suggest",
+    "ide": "side",
+    "wap": "swaps",
+    "thee": "these",
+    "ditinguih": "distinguish",
+    "eion": "session",
+    "creenhot": "screenshot",
+    "naphot": "snapshot",
+    "tconfig": "tsconfig",
+    "tyleheet": "stylesheet",
+    "cont": "const",
+    "miing": "missing",
+    "tarting": "starting",
+}
+
+
 @pytest.fixture
 def mock_suggestions(monkeypatch):
     suggestions = {
@@ -25,6 +56,7 @@ def mock_suggestions(monkeypatch):
 
 def test_fix_line_handles_standalone_i_and_missing_s(mock_suggestions):
     assert fix.fix_line("thi i a tet") == "this is a test"
+    assert fix.fix_word("tet") == "test"
 
 
 def test_fix_plural_after_number(mock_suggestions):
@@ -97,21 +129,38 @@ def test_fix_line_prefers_lowercase_candidates_and_skips_acronyms(mock_suggestio
     assert fix.fix_line("cae ok ee") == "case ok see"
 
 
-def test_fix_line_hardcoded_s_special_cases(mock_suggestions):
-    assert fix.fix_line("uggetion") == "suggestion"
-    assert fix.fix_line("doe it work") == "does it work"
-    assert fix.fix_line("ene") == "sense"
-    assert fix.fix_line("meage") == "message"
-    assert fix.fix_line("buine") == "business"
-    assert fix.fix_line("dicuion") == "discussion"
-    assert fix.fix_line("ucceful") == "successful"
-    assert fix.fix_line("aement") == "assessment"
-    assert fix.fix_line("aitant") == "assistant"
+def test_special_cases_map_is_empty_for_runtime():
+    assert fix.SPECIAL_CASES_S == {}
+
+
+def test_former_special_cases_are_covered_without_hardcoded_map():
+    for original, expected in FORMER_SPECIAL_CASES_S.items():
+        assert fix.fix_word(original) == expected
+
+
+def test_former_special_case_preserves_case():
     assert fix.fix_line("DOE") == "DOES"
 
 
 def test_fix_line_supports_custom_broken_letter(mock_suggestions):
     assert fix.fix_line("otor oil", broken_letter="m") == "motor oil"
+
+
+def test_find_multi_insertion_candidate_with_real_aspell():
+    assert fix.find_multi_insertion_candidate("dicuion", "s") == "discussion"
+    assert fix.find_multi_insertion_candidate("ucceful", "s") == "successful"
+
+
+def test_fix_word_multi_missing_letter_without_manual_override():
+    original_overrides = dict(fix.SPECIAL_CASES_S)
+    try:
+        for key in ("dicuion", "ucceful"):
+            fix.SPECIAL_CASES_S.pop(key, None)
+        assert fix.fix_word("dicuion") == "discussion"
+        assert fix.fix_word("ucceful") == "successful"
+    finally:
+        fix.SPECIAL_CASES_S.clear()
+        fix.SPECIAL_CASES_S.update(original_overrides)
 
 
 def test_fix_parse_args_accepts_custom_broken_letter():

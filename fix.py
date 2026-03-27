@@ -19,24 +19,21 @@ import sys
 
 
 DEFAULT_BROKEN_LETTER = "s"
-SPECIAL_CASES_S = {
-    # this is opinionated, but these are common enough that it's worth hardcoding them rather than relying on aspell suggestions
-    "uggetion": "suggestion",
-    "doe": "does",
-    "ene": "sense",
-    "meage": "message",
-    "buine": "business",
-    "dicuion": "discussion",
-    "ucceful": "successful",
-    "aement": "assessment",
-    "aitant": "assistant",
-    "cla": "class",
-    "jut": "just",
-    "tatu": "status",
-    "ubcla": "subclass",
-    "tatubar": "statusbar",
-    "ugget": "suggest",
-    "ide": "side",
+MAX_MULTI_INSERTIONS = 4
+SPECIAL_CASES_S = {}
+
+# Extra vocabulary for developer-oriented text that aspell may not recognize.
+DOMAIN_WORDS = {
+    "does",
+    "just",
+    "const",
+    "side",
+    "these",
+    "starting",
+    "statusbar",
+    "tsconfig",
+    "stylesheet",
+    "swaps",
 }
 
 PRONOUNS = {
@@ -188,12 +185,103 @@ def pick_insertion_suggestion(lookup_word, suggestions, broken_letter):
         return None
 
     if lookup_word.islower():
-        lowercase_matches = [suggestion for suggestion in matches if suggestion.islower()]
-        if lowercase_matches:
-            return lowercase_matches[0]
-        return None
+        matches = [suggestion for suggestion in matches if suggestion.islower()]
+        if not matches:
+            return None
+
+    domain_words_lower = {word.lower() for word in DOMAIN_WORDS}
+    domain_matches = [suggestion for suggestion in matches if suggestion.lower() in domain_words_lower]
+    if domain_matches:
+        return domain_matches[0]
 
     return matches[0]
+
+
+def generate_letter_insertions(word, letter, count):
+    """Generate all strings formed by inserting `letter` exactly `count` times."""
+    states = {word}
+    for _ in range(count):
+        next_states = set()
+        for state in states:
+            for index in range(len(state) + 1):
+                next_states.add(state[:index] + letter + state[index:])
+        states = next_states
+    return states
+
+
+def get_correct_words(words):
+    """Return the subset of words aspell considers correct, using one batch call."""
+    if not words:
+        return set()
+
+    result = subprocess.run(
+        ["aspell", "-a"],
+        input="\n".join(words) + "\n",
+        capture_output=True,
+        text=True,
+    )
+
+    statuses = []
+    for line in result.stdout.splitlines():
+        if line.startswith("*"):
+            statuses.append(True)
+        elif line.startswith("&") or line.startswith("#"):
+            statuses.append(False)
+
+    domain_words_lower = {word.lower() for word in DOMAIN_WORDS}
+    if len(statuses) != len(words):
+        return {word for word in words if word.lower() in domain_words_lower}
+
+    return {
+        word
+        for word, is_correct in zip(words, statuses)
+        if is_correct or word.lower() in domain_words_lower
+    }
+
+
+def score_multi_insertion_candidate(candidate, original, broken_letter, insertions):
+    """Score candidates so deterministic and domain-relevant words are preferred."""
+    candidate_lower = candidate.lower()
+    score = 0
+    if candidate_lower in DOMAIN_WORDS:
+        score += 100
+    if candidate_lower.startswith(broken_letter) and not original.startswith(broken_letter):
+        score += 3
+    if candidate_lower.endswith(broken_letter):
+        score += 1
+    score -= insertions
+    return score
+
+
+def find_multi_insertion_candidate(
+    lookup_word,
+    broken_letter,
+    min_insertions=1,
+    max_insertions=MAX_MULTI_INSERTIONS,
+    only_domain_words=False,
+):
+    """Find a valid correction by inserting the broken letter multiple times."""
+    if not lookup_word.isalpha() or len(lookup_word) < 3:
+        return None
+
+    lookup_word = lookup_word.lower()
+    best_candidate = None
+    best_score = None
+
+    for insertions in range(min_insertions, max_insertions + 1):
+        candidates = sorted(generate_letter_insertions(lookup_word, broken_letter, insertions))
+        correct_words = get_correct_words(candidates)
+        if only_domain_words:
+            domain_words_lower = {word.lower() for word in DOMAIN_WORDS}
+            correct_words = {candidate for candidate in correct_words if candidate.lower() in domain_words_lower}
+
+        for candidate in sorted(correct_words):
+            score = score_multi_insertion_candidate(candidate, lookup_word, broken_letter, insertions)
+            if best_score is None or score > best_score or (score == best_score and candidate < best_candidate):
+                best_candidate = candidate
+                best_score = score
+
+    return best_candidate
 
 
 def try_fix_trailing_apostrophe(core, suffix, broken_letter):
@@ -336,11 +424,6 @@ def fix_word(word, broken_letter=DEFAULT_BROKEN_LETTER):
     if not core:
         return word
 
-    if broken_letter == DEFAULT_BROKEN_LETTER:
-        forced = SPECIAL_CASES_S.get(core.lower())
-        if forced is not None:
-            return prefix + restore_case(forced, core) + suffix
-
     apostrophe_fix = try_fix_trailing_apostrophe(core, suffix, broken_letter)
     if apostrophe_fix is not None:
         return prefix + restore_case(apostrophe_fix, core)
@@ -350,9 +433,30 @@ def fix_word(word, broken_letter=DEFAULT_BROKEN_LETTER):
     suggestions = get_suggestions(lookup_word.lower())
 
     if suggestions is None:
-        return word
+        fixed = find_multi_insertion_candidate(
+            lookup_word,
+            broken_letter,
+            min_insertions=1,
+            max_insertions=MAX_MULTI_INSERTIONS,
+            only_domain_words=True,
+        )
+        if fixed is None:
+            return word
+        fixed = restore_case(fixed.lower(), core)
+        return prefix + fixed + trailing_suffix
 
     fixed = pick_insertion_suggestion(lookup_word, suggestions, broken_letter)
+    domain_fallback = find_multi_insertion_candidate(
+        lookup_word,
+        broken_letter,
+        min_insertions=1,
+        max_insertions=MAX_MULTI_INSERTIONS,
+        only_domain_words=True,
+    )
+    if domain_fallback is not None and (fixed is None or fixed.lower() not in {word.lower() for word in DOMAIN_WORDS}):
+        fixed = domain_fallback
+    if fixed is None:
+        fixed = find_multi_insertion_candidate(lookup_word, broken_letter)
     if fixed is None:
         return word
 
